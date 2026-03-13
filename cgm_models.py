@@ -114,7 +114,8 @@ class EnergyScore(Loss):
 
 class cgm(object):
     
-    def __init__(self, dim_out, dim_in_features, dim_in_past, dim_latent, n_samples_train, loss_weight, emb_size=2):
+    def __init__(self, dim_out, dim_in_features, dim_in_past, dim_latent, n_samples_train, loss_weight,
+                 emb_size=2, stochastic_mode='chen', engression_latent_dim=None, engression_weight=1.0):
         
         super(cgm, self).__init__()
         
@@ -128,6 +129,9 @@ class cgm(object):
         self.dim_latent = dim_latent #50
         self.dim_in_features = dim_in_features #43
         self.dim_in_past = dim_in_past #165
+        self.stochastic_mode = stochastic_mode
+        self.engression_latent_dim = engression_latent_dim if engression_latent_dim is not None else dim_latent
+        self.engression_weight = engression_weight
         
         #self.model, self.model_delta = self._build_model()
         self.model = self._build_model()
@@ -156,7 +160,7 @@ class cgm(object):
         tsp = layers.Flatten()(tsp)
         # (, 20)
         
-        ##### Conditional noise part ####
+        ##### Conditional noise part (Chen branch) ####
         delta = layers.Dense(512, activation = 'elu')(input_std)
         delta = layers.Dense(256, activation = 'elu')(delta)
         delta = layers.Dense(self.dim_latent, activation = 'exponential')(delta)
@@ -172,6 +176,22 @@ class cgm(object):
         # (, n_samples, dim_latent)
         z = layers.Multiply()([delta_z, epsilon])
         # (, n_samples, dim_latent)
+
+        ##### Engression-inspired stochastic latent branch ####
+        eng_features = layers.Concatenate(axis=1)([input_std, input_all])
+        eng_hidden = layers.Dense(512, activation='elu')(eng_features)
+        eng_hidden = layers.Dense(256, activation='elu')(eng_hidden)
+        eng_mu = layers.Dense(self.engression_latent_dim, activation='linear')(eng_hidden)
+        eng_log_scale = layers.Dense(self.engression_latent_dim, activation='linear')(eng_hidden)
+        eng_scale = layers.Activation('softplus')(eng_log_scale)
+
+        eng_mu_rep = layers.RepeatVector(self.n_samples_train)(eng_mu)
+        eng_scale_rep = layers.RepeatVector(self.n_samples_train)(eng_scale)
+        epsilon_eng = self.sample_layer([bs, tf.constant(self.n_samples_train), tf.constant(self.engression_latent_dim)])
+        u_eng_noise = layers.Multiply()([eng_scale_rep, epsilon_eng])
+        u_eng_scaled = layers.Lambda(lambda x: self.engression_weight * x)(u_eng_noise)
+        u_eng = layers.Add()([eng_mu_rep, u_eng_scaled])
+        # (, n_samples, engression_latent_dim)
         
         ##### Weights part ####
         features_in = layers.Concatenate(axis=1)([input_all, emb])
@@ -180,7 +200,16 @@ class cgm(object):
         all_predictors = layers.RepeatVector(self.n_samples_train)(all_predictors) 
         # (, n_samples, dim_in_features+20)
         
-        W = layers.Concatenate(axis=2)([all_predictors, z])
+        if self.stochastic_mode == 'chen':
+            stochastic_latent = z
+        elif self.stochastic_mode == 'engression':
+            stochastic_latent = u_eng
+        elif self.stochastic_mode == 'fusion':
+            stochastic_latent = layers.Concatenate(axis=2)([z, u_eng])
+        else:
+            raise ValueError("stochastic_mode must be one of {'chen', 'engression', 'fusion'}")
+
+        W = layers.Concatenate(axis=2)([all_predictors, stochastic_latent])
         # (, n_samples, dim_in_features+20+dim_latent)
         W = layers.Dense(512, activation = 'elu')(W)
         W = layers.Dense(256, activation = 'elu')(W)
