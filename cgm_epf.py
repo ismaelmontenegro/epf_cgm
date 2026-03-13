@@ -287,6 +287,7 @@ y_all = np.concatenate([best_step, output_norm], axis=1) # (n, 11, 1)
 Nfeatures = input_all.shape[1]
 Npast = 165
 DIM_LATENT = 100
+ENGRESSION_LATENT_DIM = 100
 N_SAMPLES_TRAIN = 200 # number of samples drawn during training
 N_SAMPLES_TEST = 1000 # 200
 
@@ -298,6 +299,7 @@ LEARNING_RATE = 1e-4 # 'decay' or value 1e-4
 n_ens = 10
 
 print('\n batch size', BATCH_SIZE, '\n latent dim', DIM_LATENT,
+      '\n engression latent dim', ENGRESSION_LATENT_DIM,
       '\n learning rate', LEARNING_RATE, '\n #(training generated samples)', N_SAMPLES_TRAIN,
       '\n #(test generated samples)', N_SAMPLES_TEST, '\n #(model run)', n_ens)
       
@@ -332,7 +334,10 @@ for ens in range(n_ens):
                    dim_in_past=Npast,
                    dim_latent=DIM_LATENT,
                    n_samples_train=N_SAMPLES_TRAIN,
-                   loss_weight = loss_index_w)
+                   loss_weight = loss_index_w,
+                   stochastic_mode='fusion',
+                   engression_latent_dim=ENGRESSION_LATENT_DIM,
+                   engression_weight=1.0)
 
     # Fit model
     cgm_init.fit(x = x_train, 
